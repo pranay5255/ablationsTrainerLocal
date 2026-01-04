@@ -1,0 +1,162 @@
+# Qwen2.5-Coder-3B Final Training Configuration
+# Purpose: Final model training after ablation validation (PRD Section 3.3)
+# Hardware: RTX 4090 (24GB VRAM) - Requires 4-bit quantization or multi-GPU
+
+experiment:
+  name: "qwen25-coder-3b-final"
+  description: "Qwen2.5-Coder-3B final training - primary model for vulnerability detection"
+  tags: ["final", "qwen-coder", "3b", "production"]
+
+# Model Configuration
+model:
+  name: "Qwen/Qwen2.5-Coder-3B"
+  revision: "main"
+  dtype: "bfloat16"
+  max_seq_length: 2048
+  trust_remote_code: true
+  # Required for RTX 4090 with 3B model
+  load_in_4bit: true
+  bnb_4bit_compute_dtype: "bfloat16"
+  bnb_4bit_quant_type: "nf4"
+  bnb_4bit_use_double_quant: true
+
+# LoRA Configuration (memory efficient for 3B)
+lora:
+  enabled: true
+  r: 8  # Reduced rank for memory
+  alpha: 16
+  dropout: 0.05
+  target_modules:
+    - "q_proj"
+    - "k_proj"
+    - "v_proj"
+    - "o_proj"
+    - "gate_proj"
+    - "up_proj"
+    - "down_proj"
+
+# Training Stages (Full Pipeline)
+stages:
+  # Stage 1: Continued Pretraining
+  cpt:
+    enabled: true
+    description: "Domain adaptation on Solidity corpus"
+    tokens: 10_000_000_000  # 10B tokens minimum
+    dataset: "output/processed/cpt"
+    learning_rate: 1e-4
+    min_learning_rate: 1e-5
+    warmup_ratio: 0.03
+    weight_decay: 0.01
+    per_device_batch_size: 1
+    gradient_accumulation_steps: 32
+    effective_batch_size: 32
+    save_steps: 2000
+    logging_steps: 100
+    # Data mixture as per PRD Section 4.1
+    data_mixture:
+      general_code: 0.50
+      solidity_code: 0.30
+      audit_reports: 0.10
+      math_reasoning: 0.10
+
+  # Stage 2: Supervised Fine-Tuning
+  sft:
+    enabled: true
+    description: "Vulnerability detection instruction tuning"
+    dataset: "output/processed/sft"
+    num_epochs: 2
+    learning_rate: 2e-5
+    warmup_ratio: 0.0
+    weight_decay: 0.01
+    per_device_batch_size: 1
+    gradient_accumulation_steps: 32
+    effective_batch_size: 32
+    save_steps: 500
+    eval_steps: 500
+    logging_steps: 50
+    # Data mixture as per PRD Section 4.1
+    data_mixture:
+      labeled_vulns: 0.40
+      synthetic_vulns: 0.25
+      clean_contracts: 0.20
+      general_code: 0.10
+      security_docs: 0.05
+
+  # Stage 3a: DPO
+  dpo:
+    enabled: true
+    description: "Preference optimization for detection accuracy"
+    dataset: "output/processed/dpo"
+    beta: 0.1
+    learning_rate: 5e-7
+    num_epochs: 1
+    warmup_ratio: 0.1
+    per_device_batch_size: 1
+    gradient_accumulation_steps: 8
+    max_length: 2048
+    max_prompt_length: 1024
+    save_steps: 200
+    eval_steps: 200
+
+  # Stage 3b: GRPO
+  grpo:
+    enabled: true
+    description: "Reward-based optimization using Slither validation"
+    dataset: "output/processed/grpo"
+    num_generations: 4
+    learning_rate: 1e-6
+    num_epochs: 1
+    per_device_batch_size: 1
+    gradient_accumulation_steps: 4
+    reward_model: "slither_validation"
+
+# RTX 4090 Optimizations (Critical for 3B)
+hardware:
+  gpu: "RTX 4090"
+  vram_gb: 24
+  use_flash_attention: true
+  use_gradient_checkpointing: true
+  mixed_precision: "bf16"
+  # Memory management
+  max_memory_mb: 22000  # Leave headroom
+  offload_optimizer: false  # Enable if OOM
+
+# Evaluation
+evaluation:
+  dataset: "smartbugs"
+  eval_every_n_steps: 1000
+  metrics:
+    - "precision"
+    - "recall"
+    - "f1"
+    - "false_positive_rate"
+  primary_metric: "f1"
+  # Target metrics as per PRD Section 6.1
+  targets:
+    precision: 0.35
+    recall: 0.70
+    f1: 0.45
+    false_positive_rate: 0.65
+
+# Go/No-Go Checkpoints (PRD Section 7.3)
+checkpoints:
+  day_55:
+    min_f1: 0.45
+    action_if_fail: "Additional DPO epoch"
+
+# Experiment Tracking
+wandb:
+  project: "smart-contract-vuln-detection"
+  group: "final-3b"
+  tags: ["qwen-coder", "3b", "final", "production"]
+  log_model: true
+
+# Output
+output:
+  dir: "checkpoints/qwen25-coder-3b"
+  save_total_limit: 5
+  push_to_hub: false
+  # After training, export options
+  export_formats:
+    - "safetensors"
+    - "gguf"  # For llama.cpp deployment

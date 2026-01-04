@@ -1,0 +1,134 @@
+# SmolLM2-135M Ablation Configuration
+# Purpose: Data mix optimization, LR sweeps (PRD Section 3.3)
+# Hardware: RTX 4090 (24GB VRAM)
+
+experiment:
+  name: "smollm2-135m-ablation"
+  description: "SmolLM2-135M ablation for data mix optimization and learning rate sweeps"
+  tags: ["ablation", "small-model", "data-mix", "lr-sweep"]
+
+# Model Configuration
+model:
+  name: "HuggingFaceTB/SmolLM2-135M"
+  revision: "main"
+  dtype: "bfloat16"
+  max_seq_length: 2048
+  trust_remote_code: true
+
+# LoRA Configuration (memory efficient for ablations)
+lora:
+  enabled: true
+  r: 32  # Higher rank for small model
+  alpha: 64
+  dropout: 0.05
+  target_modules:
+    - "q_proj"
+    - "k_proj"
+    - "v_proj"
+    - "o_proj"
+    - "gate_proj"
+    - "up_proj"
+    - "down_proj"
+
+# Training Stages
+stages:
+  # Stage 1: Continued Pretraining (optional for ablations)
+  cpt:
+    enabled: false  # Skip for quick ablations
+    tokens: 500_000_000  # 500M tokens for ablation
+
+  # Stage 2: Supervised Fine-Tuning
+  sft:
+    enabled: true
+    dataset: "output/processed/sft"
+    num_epochs: 2
+    learning_rate: 2e-5
+    warmup_ratio: 0.0
+    weight_decay: 0.01
+    per_device_batch_size: 8  # Can fit larger batches with 135M
+    gradient_accumulation_steps: 4
+    effective_batch_size: 32
+    max_steps: -1  # Use num_epochs
+    save_steps: 500
+    eval_steps: 500
+    logging_steps: 50
+
+  # Stage 3a: DPO
+  dpo:
+    enabled: true
+    dataset: "output/processed/dpo"
+    beta: 0.1
+    learning_rate: 5e-7
+    num_epochs: 1
+    warmup_ratio: 0.1
+    per_device_batch_size: 4
+    gradient_accumulation_steps: 4
+    max_length: 2048
+    max_prompt_length: 1024
+    save_steps: 200
+    eval_steps: 200
+
+  # Stage 3b: GRPO (optional, after DPO validation)
+  grpo:
+    enabled: false  # Enable after DPO proves effective
+    num_generations: 4
+    learning_rate: 1e-6
+    num_epochs: 1
+
+# RTX 4090 Optimizations
+hardware:
+  gpu: "RTX 4090"
+  vram_gb: 24
+  use_flash_attention: true
+  use_gradient_checkpointing: false  # Not needed for 135M
+  mixed_precision: "bf16"
+
+# Learning Rate Sweep (ablation grid)
+lr_sweep:
+  values: [1e-5, 2e-5, 5e-5, 1e-4]
+  best_lr: null  # To be determined
+
+# Data Mix Sweep (ablation grid)
+data_mix_sweep:
+  - name: "balanced"
+    labeled_vulns: 0.40
+    synthetic_vulns: 0.25
+    clean_contracts: 0.20
+    general_code: 0.10
+    security_docs: 0.05
+  - name: "vuln_heavy"
+    labeled_vulns: 0.50
+    synthetic_vulns: 0.30
+    clean_contracts: 0.10
+    general_code: 0.05
+    security_docs: 0.05
+  - name: "clean_heavy"
+    labeled_vulns: 0.30
+    synthetic_vulns: 0.20
+    clean_contracts: 0.35
+    general_code: 0.10
+    security_docs: 0.05
+
+# Evaluation
+evaluation:
+  dataset: "smartbugs"
+  eval_every_n_steps: 500
+  metrics:
+    - "precision"
+    - "recall"
+    - "f1"
+    - "false_positive_rate"
+  primary_metric: "f1"
+  target_f1: 0.20  # Go/No-Go checkpoint
+
+# Experiment Tracking
+wandb:
+  project: "smart-contract-vuln-detection"
+  group: "ablations-135m"
+  tags: ["smollm2", "135m", "ablation"]
+
+# Output
+output:
+  dir: "checkpoints/smollm2-135m"
+  save_total_limit: 3
+  push_to_hub: false

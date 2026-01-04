@@ -1,0 +1,103 @@
+# Baguettotron-321M Ablation Configuration
+# Purpose: Alternative architecture validation (PRD Section 3.3)
+# Hardware: RTX 4090 (24GB VRAM)
+
+experiment:
+  name: "baguettotron-321m-ablation"
+  description: "PleIAs/Baguettotron-321M ablation for alternative architecture comparison"
+  tags: ["ablation", "alternative-arch", "baguettotron"]
+
+# Model Configuration
+model:
+  name: "PleIAs/Baguettotron-321M"
+  revision: "main"
+  dtype: "bfloat16"
+  max_seq_length: 2048
+  trust_remote_code: true
+
+# LoRA Configuration
+lora:
+  enabled: true
+  r: 32
+  alpha: 64
+  dropout: 0.05
+  target_modules:
+    - "q_proj"
+    - "k_proj"
+    - "v_proj"
+    - "o_proj"
+    - "gate_proj"
+    - "up_proj"
+    - "down_proj"
+
+# Training Stages
+stages:
+  cpt:
+    enabled: false
+    tokens: 2_000_000_000
+
+  sft:
+    enabled: true
+    dataset: "output/processed/sft"
+    num_epochs: 2
+    learning_rate: 2e-5
+    warmup_ratio: 0.0
+    weight_decay: 0.01
+    per_device_batch_size: 4
+    gradient_accumulation_steps: 8
+    effective_batch_size: 32
+    save_steps: 500
+    eval_steps: 500
+    logging_steps: 50
+
+  dpo:
+    enabled: true
+    dataset: "output/processed/dpo"
+    beta: 0.1
+    learning_rate: 5e-7
+    num_epochs: 1
+    warmup_ratio: 0.1
+    per_device_batch_size: 2
+    gradient_accumulation_steps: 8
+    max_length: 2048
+    max_prompt_length: 1024
+    save_steps: 200
+    eval_steps: 200
+
+  grpo:
+    enabled: false
+    num_generations: 4
+    learning_rate: 1e-6
+    num_epochs: 1
+
+# RTX 4090 Optimizations
+hardware:
+  gpu: "RTX 4090"
+  vram_gb: 24
+  use_flash_attention: true
+  use_gradient_checkpointing: true
+  mixed_precision: "bf16"
+
+# Evaluation
+evaluation:
+  dataset: "smartbugs"
+  eval_every_n_steps: 500
+  metrics:
+    - "precision"
+    - "recall"
+    - "f1"
+    - "false_positive_rate"
+  primary_metric: "f1"
+  target_f1: 0.20
+
+# Experiment Tracking
+wandb:
+  project: "smart-contract-vuln-detection"
+  group: "ablations-baguettotron"
+  tags: ["baguettotron", "321m", "ablation", "alt-arch"]
+
+# Output
+output:
+  dir: "checkpoints/baguettotron-321m"
+  save_total_limit: 3
+  push_to_hub: false

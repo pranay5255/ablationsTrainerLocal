@@ -92,6 +92,7 @@ class DatasetBuilder:
 
     def build_sft_dataset(
         self,
+        variant: str = "THINK",
         num_samples: Optional[int] = None,
         mixture: Optional[DataMixture] = None,
         format_type: str = "chat",  # "chat" or "alpaca"
@@ -99,25 +100,23 @@ class DatasetBuilder:
         save_path: Optional[str] = None
     ) -> DatasetDict:
         """
-        Build SFT dataset from available data sources.
-
-        Args:
-            num_samples: Target number of samples (None = all available)
-            mixture: Data mixture ratios
-            format_type: Output format ("chat" for TRL, "alpaca" for LLaMA-Factory)
-            train_split: Train/validation split ratio
-            save_path: Optional path to save dataset
-
-        Returns:
-            DatasetDict with train and validation splits
+        Build SFT dataset according to variant (THINK or INSTRUCT).
         """
+        if variant == "RL-ZERO":
+            logger.info("RL-ZERO variant: Skipping SFT dataset building.")
+            return DatasetDict()
+
         if mixture is None:
             mixture = DataMixture()
 
         examples = []
-
-        # Load vulnerable contracts (SmartBugs + Kaggle)
-        logger.info("Loading vulnerable contracts...")
+        
+        # Determine sequence length based on variant
+        max_seq_length = 32768 if variant == "THINK" else 8192
+        
+        # Load vulnerable contracts
+        logger.info(f"Building SFT dataset for {variant} variant...")
+        # ... logic for generating traces would go here ...
         vuln_count = 0
         target_vulns = int((num_samples or 10000) * mixture.labeled_vulns)
 
@@ -420,11 +419,12 @@ class DatasetBuilder:
 
 
 def create_datasets_for_ablation(
-    data_dir: str = "/data",
+    data_dir: str = "output",
     output_dir: str = "output/processed",
+    variant: str = "THINK",
     sft_samples: int = 10000,
     dpo_samples: int = 5000,
-    grpo_prompts: int = 1000
+    rl_prompts: int = 1000
 ) -> Dict[str, Path]:
     """
     Convenience function to create all datasets for ablation experiments.
@@ -432,42 +432,46 @@ def create_datasets_for_ablation(
     Args:
         data_dir: Path to raw data
         output_dir: Path for processed datasets
+        variant: THINK, INSTRUCT, or RL-ZERO
         sft_samples: Number of SFT examples
         dpo_samples: Number of DPO preference pairs
-        grpo_prompts: Number of GRPO prompts
+        rl_prompts: Number of RL prompts
 
     Returns:
         Dictionary of dataset paths
     """
     builder = DatasetBuilder(data_dir=data_dir, output_dir=output_dir)
-    output_dir = Path(output_dir)
+    output_dir = Path(output_dir) / variant.lower()
+    output_dir.mkdir(parents=True, exist_ok=True)
 
     paths = {}
 
-    # SFT dataset
-    logger.info("Building SFT dataset...")
-    builder.build_sft_dataset(
-        num_samples=sft_samples,
-        format_type="chat",
-        save_path=output_dir / "sft"
-    )
-    paths["sft"] = output_dir / "sft"
+    if variant != "RL-ZERO":
+        # SFT dataset
+        logger.info(f"Building SFT dataset for {variant}...")
+        builder.build_sft_dataset(
+            variant=variant,
+            num_samples=sft_samples,
+            format_type="chat",
+            save_path=output_dir / "sft"
+        )
+        paths["sft"] = output_dir / "sft"
 
-    # DPO dataset
-    logger.info("Building DPO dataset...")
+    # DPO dataset (Delta Learning)
+    logger.info(f"Building DPO dataset (Delta Learning) for {variant}...")
     builder.build_dpo_dataset(
         num_samples=dpo_samples,
         save_path=output_dir / "dpo"
     )
     paths["dpo"] = output_dir / "dpo"
 
-    # GRPO prompts
-    logger.info("Building GRPO prompts...")
+    # RL prompts
+    logger.info(f"Building RL prompts for {variant}...")
     builder.build_grpo_prompts(
-        num_prompts=grpo_prompts,
-        save_path=output_dir / "grpo"
+        num_prompts=rl_prompts,
+        save_path=output_dir / "rl"
     )
-    paths["grpo"] = output_dir / "grpo"
+    paths["rl"] = output_dir / "rl"
 
-    logger.info(f"All datasets created in {output_dir}")
+    logger.info(f"All datasets for {variant} created in {output_dir}")
     return paths

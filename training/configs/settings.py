@@ -15,7 +15,7 @@ from enum import Enum
 # Path Configuration
 # =============================================================================
 PROJECT_ROOT = Path(__file__).parent.parent.parent
-DATA_DIR = Path("/data")  # External data directory
+DATA_DIR = Path("output")  # External data directory
 OUTPUT_DIR = PROJECT_ROOT / "output"
 CHECKPOINTS_DIR = PROJECT_ROOT / "checkpoints"
 LOGS_DIR = PROJECT_ROOT / "logs"

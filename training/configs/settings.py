@@ -65,88 +65,72 @@ class ModelConfig:
 # =============================================================================
 class TrainingStage(Enum):
     """Training stages as per PRD Section 4.1"""
-    CPT = "continued_pretraining"
     SFT = "supervised_finetuning"
     DPO = "direct_preference_optimization"
-    GRPO = "group_relative_policy_optimization"
-
-
-@dataclass
-class CPTConfig:
-    """Continued Pretraining configuration (Stage 1)"""
-    # Data mixture as per PRD
-    general_code_ratio: float = 0.50  # OLMo3 Dolma mix
-    solidity_code_ratio: float = 0.30  # Zellic 514K + Etherscan
-    audit_reports_ratio: float = 0.10
-    math_reasoning_ratio: float = 0.10
-
-    # Training params
-    learning_rate: float = 1e-4
-    min_learning_rate: float = 1e-5
-    warmup_ratio: float = 0.03
-    weight_decay: float = 0.01
-    max_steps: int = 50000  # Adjust based on token budget
-
-    # RTX 4090 optimized
-    per_device_batch_size: int = 4
-    gradient_accumulation_steps: int = 8
-    effective_batch_size: int = 32
+    RLVR = "reinforcement_learning_verifiable_rewards"
 
 
 @dataclass
 class SFTConfig:
-    """Supervised Fine-Tuning configuration (Stage 2)"""
-    # Data mixture as per PRD
-    labeled_vulns_ratio: float = 0.40  # 5K-10K contracts
-    synthetic_vulns_ratio: float = 0.25  # HexaCoder
-    clean_contracts_ratio: float = 0.20
-    general_code_ratio: float = 0.10
-    security_docs_ratio: float = 0.05  # SWC, CWE
+    """Supervised Fine-Tuning configuration (Stage 1)"""
+    # Variants from PRD
+    variant: str = "THINK"  # THINK, INSTRUCT, RL-ZERO
 
-    # Training params (PRD Section 4.2)
+    # THINK Model SFT: detailed reasoning traces
+    # INSTRUCT Model SFT: warm-start from THINK, strip traces, add tool use
+
+    # Training params
     learning_rate: float = 2e-5
     num_epochs: int = 2
-    warmup_ratio: float = 0.0  # PRD says "not needed"
-    weight_decay: float = 0.01
+    warmup_ratio: float = 0.03
+    weight_decay: float = 0.1
+    max_seq_length: int = 32768  # 32K for THINK, 8K for INSTRUCT
 
     # RTX 4090 optimized
-    per_device_batch_size: int = 2
-    gradient_accumulation_steps: int = 16
-    effective_batch_size: int = 32  # Target: 3840-7680 effective
+    per_device_batch_size: int = 1
+    gradient_accumulation_steps: int = 32
+    effective_batch_size: int = 32
 
     # LoRA
     use_lora: bool = True
-    lora_r: int = 16
+    lora_r: int = 32
 
 
 @dataclass
 class DPOConfig:
-    """Direct Preference Optimization configuration (Stage 3a)"""
-    # Training params (PRD Section 4.2)
+    """Direct Preference Optimization configuration (Stage 2)"""
+    # Delta Learning: Strong (3B) vs Weak (0.5B)
     beta: float = 0.1
     learning_rate: float = 5e-7
     num_epochs: int = 1
     warmup_ratio: float = 0.1
 
-    # RTX 4090 optimized
+    # Length filter (PRD 6.3)
+    max_chosen_rejected_diff: int = 100
+
     per_device_batch_size: int = 1
     gradient_accumulation_steps: int = 8
     max_length: int = 2048
-    max_prompt_length: int = 1024
 
 
 @dataclass
-class GRPOConfig:
-    """Group Relative Policy Optimization configuration (Stage 3b)"""
-    # Training params (PRD Section 4.2)
+class RLVRConfig:
+    """RL with Verifiable Rewards (Stage 3 - OlmoRL)"""
+    algorithm: str = "olmorl_grpo"
     num_generations: int = 4
     learning_rate: float = 1e-6
     num_epochs: int = 1
 
-    # Reward model
-    reward_model: str = "slither_validation"
+    # OlmoRL specifics
+    zero_gradient_filtering: bool = True
+    active_sampling: bool = True
+    token_level_loss: bool = True
+    no_kl_loss: bool = True
+    clip_low: float = 0.2
+    clip_high: float = 0.28
+    truncated_is: bool = True
+    no_std_normalization: bool = True
 
-    # RTX 4090 optimized
     per_device_batch_size: int = 1
     gradient_accumulation_steps: int = 4
 
@@ -299,7 +283,7 @@ DEFAULT_MODEL_CONFIG = ModelConfig(
 
 DEFAULT_SFT_CONFIG = SFTConfig()
 DEFAULT_DPO_CONFIG = DPOConfig()
-DEFAULT_GRPO_CONFIG = GRPOConfig()
+DEFAULT_RLVR_CONFIG = RLVRConfig()
 DEFAULT_EVAL_CONFIG = EvalConfig()
 DEFAULT_RTX4090_CONFIG = RTX4090Config()
 DEFAULT_WANDB_CONFIG = WandbConfig()

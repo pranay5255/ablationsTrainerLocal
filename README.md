@@ -33,18 +33,20 @@ This repository contains the training code for fine-tuning small language models
 
 ```bash
 # Create virtual environment
+python --version  # 3.10 - 3.12 recommended
 python -m venv venv
 source venv/bin/activate  # Linux/Mac
 # or: venv\Scripts\activate  # Windows
 
-# Install dependencies
-pip install -r requirements.txt
+# Install base dependencies
+uv pip install -r requirements.txt
+# or: pip install -r requirements.txt
 
-# Install Unsloth (for 2x faster training)
-pip install "unsloth[colab-new] @ git+https://github.com/unslothai/unsloth.git"
+# Install GPU/acceleration extras (optional)
+uv pip install -r requirements-gpu.txt
 
 # Install Flash Attention (optional but recommended)
-pip install flash-attn --no-build-isolation
+uv pip install flash-attn --no-build-isolation
 ```
 
 ### 2. Data Inputs (External)
@@ -228,7 +230,7 @@ load_in_4bit: true
 
 ```bash
 # Install Unsloth
-pip install "unsloth[colab-new] @ git+https://github.com/unslothai/unsloth.git"
+uv pip install -r requirements-gpu.txt
 
 # Or training will fall back to standard transformers + PEFT
 ```

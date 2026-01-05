@@ -121,6 +121,7 @@ class DatasetBuilder:
         vuln_count = 0
         target_vulns = int((num_samples or 10000) * mixture.labeled_vulns)
 
+        # SmartBugs
         for contract in self.loader.load_smartbugs():
             if vuln_count >= target_vulns:
                 break
@@ -134,6 +135,22 @@ class DatasetBuilder:
             else:
                 examples.append(format_sft_alpaca(sft_example))
             vuln_count += 1
+
+        # Kaggle
+        if vuln_count < target_vulns:
+            for contract in self.loader.load_kaggle_vulnerability():
+                if vuln_count >= target_vulns:
+                    break
+                sft_example = format_sft_example(
+                    source_code=contract.source_code,
+                    vulnerabilities=contract.vulnerabilities,
+                    is_vulnerable=True
+                )
+                if format_type == "chat":
+                    examples.append({"messages": format_sft_chat(sft_example)})
+                else:
+                    examples.append(format_sft_alpaca(sft_example))
+                vuln_count += 1
 
         # Load clean contracts from Zellic (subset)
         logger.info("Loading clean contracts...")

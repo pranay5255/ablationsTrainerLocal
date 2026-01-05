@@ -67,7 +67,7 @@ class DataLoader:
     └── educational/         # Ethernaut, Cyfrin, RareSkills
     """
 
-    def __init__(self, data_dir: Union[str, Path] = "/data"):
+    def __init__(self, data_dir: Union[str, Path] = "output"):
         self.data_dir = Path(data_dir)
         self._validate_data_dir()
 
@@ -81,21 +81,30 @@ class DataLoader:
         """List available data sources in the data directory"""
         if not self.data_dir.exists():
             return []
-        return [d.name for d in self.data_dir.iterdir() if d.is_dir()]
+        sources = []
+        if (self.data_dir / "repos/vulnerability_datasets/smartbugs-curated").exists():
+            sources.append("smartbugs")
+        if (self.data_dir / "datasets/kaggle").exists():
+            sources.append("kaggle")
+        if (self.data_dir / "datasets/huggingface/Zellic_smart-contract-fiesta").exists():
+            sources.append("zellic")
+        if (self.data_dir / "repos/audit_repos").exists():
+            sources.append("audit_reports")
+        return sources
 
     def load_smartbugs(self) -> Iterator[SolidityContract]:
         """
         Load SmartBugs-curated dataset.
         Expected structure:
-        /data/smartbugs/
+        output/repos/vulnerability_datasets/smartbugs-curated/
         ├── dataset/
         │   └── <vulnerability_type>/
         │       └── <contract>.sol
         └── vulnerabilities.json
         """
-        smartbugs_dir = self.data_dir / "smartbugs"
+        smartbugs_dir = self.data_dir / "repos/vulnerability_datasets/smartbugs-curated"
         if not smartbugs_dir.exists():
-            logger.warning("SmartBugs directory not found")
+            logger.warning(f"SmartBugs directory not found at {smartbugs_dir}")
             return
 
         # Load vulnerability annotations if available
@@ -129,56 +138,65 @@ class DataLoader:
 
     def load_kaggle_vulnerability(self) -> Iterator[SolidityContract]:
         """
-        Load Kaggle smart contract vulnerability dataset.
+        Load Kaggle smart contract vulnerability datasets.
         Expected structure:
-        /data/kaggle/
-        └── contracts.jsonl  # or contracts.csv
+        output/datasets/kaggle/
+        ├── tranduongminhdai_smart-contract-vulnerability-datset/
+        └── bcccdatasets_bccc-vulscs-2023/
         """
-        kaggle_dir = self.data_dir / "kaggle"
+        kaggle_dir = self.data_dir / "datasets/kaggle"
         if not kaggle_dir.exists():
             logger.warning("Kaggle directory not found")
             return
 
-        # Try JSONL format first
-        jsonl_file = kaggle_dir / "contracts.jsonl"
-        if jsonl_file.exists():
-            with open(jsonl_file) as f:
-                for line in f:
-                    data = json.loads(line)
+        # 1. Load tranduongminhdai dataset
+        tdm_dir = kaggle_dir / "tranduongminhdai_smart-contract-vulnerability-datset"
+        if tdm_dir.exists():
+            csv_file = tdm_dir / "SC_Vuln_8label.csv"
+            if csv_file.exists():
+                import pandas as pd
+                df = pd.read_csv(csv_file)
+                for _, row in df.iterrows():
                     contract = SolidityContract(
-                        source_code=data.get("source_code", data.get("code", "")),
-                        file_path=data.get("file_path", "unknown"),
-                        is_vulnerable=data.get("is_vulnerable", False),
-                        vulnerabilities=data.get("vulnerabilities", []),
-                        metadata={"source": "kaggle"}
+                        source_code=row.get("source_code", row.get("code", "")),
+                        file_path="tranduongminhdai/" + str(row.get("id", "unknown")),
+                        is_vulnerable=True, # This is the vuln dataset
+                        metadata={"source": "kaggle_tdm"}
                     )
                     yield contract
-            return
 
-        # Try CSV format
-        csv_file = kaggle_dir / "contracts.csv"
-        if csv_file.exists():
-            import pandas as pd
-            df = pd.read_csv(csv_file)
-            for _, row in df.iterrows():
-                contract = SolidityContract(
-                    source_code=row.get("source_code", row.get("code", "")),
-                    file_path=row.get("file_path", "unknown"),
-                    is_vulnerable=bool(row.get("is_vulnerable", False)),
-                    metadata={"source": "kaggle"}
-                )
-                yield contract
+        # 2. Load BCCC dataset
+        bccc_dir = kaggle_dir / "bcccdatasets_bccc-vulscs-2023"
+        if bccc_dir.exists():
+            vuln_csv = bccc_dir / "BCCC-VolSCs-2023_Vulnerable.csv"
+            if vuln_csv.exists():
+                import pandas as pd
+                df = pd.read_csv(vuln_csv)
+                for _, row in df.iterrows():
+                    # Look for code in Vulnerable_SourceCodes folder
+                    code_path = bccc_dir / "Vulnerable_SourceCodes" / f"{row.get('Contract Address', row.get('Address'))}.sol"
+                    source_code = ""
+                    if code_path.exists():
+                        with open(code_path) as f:
+                            source_code = f.read()
+                    
+                    contract = SolidityContract(
+                        source_code=source_code or row.get("Source Code", ""),
+                        file_path=str(code_path),
+                        is_vulnerable=True,
+                        metadata={"source": "kaggle_bccc_vuln"}
+                    )
+                    yield contract
 
     def load_zellic(self, streaming: bool = True) -> Iterator[SolidityContract]:
         """
-        Load Zellic smart-contract-fiesta dataset (514K contracts).
+        Load Zellic smart-contract-fiesta dataset.
         Expected structure:
-        /data/zellic/
-        └── contracts/  # or parquet files
+        output/datasets/huggingface/Zellic_smart-contract-fiesta/
         """
-        zellic_dir = self.data_dir / "zellic"
+        zellic_dir = self.data_dir / "datasets/huggingface/Zellic_smart-contract-fiesta"
         if not zellic_dir.exists():
-            logger.warning("Zellic directory not found")
+            logger.warning(f"Zellic directory not found at {zellic_dir}")
             return
 
         # Try parquet format (HuggingFace download)
@@ -258,14 +276,9 @@ class DataLoader:
 
     def load_audit_reports(self) -> Iterator[Dict[str, Any]]:
         """
-        Load audit reports from Code4rena, Sherlock, etc.
-        Expected structure:
-        /data/audit_reports/
-        ├── code4rena/
-        ├── sherlock/
-        └── pashov/
+        Load audit reports from output/repos/audit_repos/.
         """
-        audit_dir = self.data_dir / "audit_reports"
+        audit_dir = self.data_dir / "repos/audit_repos"
         if not audit_dir.exists():
             logger.warning("Audit reports directory not found")
             return

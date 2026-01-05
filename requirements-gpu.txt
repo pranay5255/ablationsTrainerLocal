@@ -1,0 +1,11 @@
+# GPU/acceleration extras (optional)
+# Install base deps first: uv pip install -r requirements.txt
+
+# 4-bit/8-bit quantization
+bitsandbytes>=0.42.0
+
+# Unsloth - 2x speed, 60% less memory (Primary for SFT)
+unsloth[colab-new] @ git+https://github.com/unslothai/unsloth.git
+
+# Flash Attention 2 (requires CUDA 11.8+)
+# Install with: uv pip install flash-attn --no-build-isolation

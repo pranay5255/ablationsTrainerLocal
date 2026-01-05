@@ -13,10 +13,7 @@ safetensors>=0.4.0
 # =============================================================================
 # Training Libraries (as per PRD Section 4.2)
 # =============================================================================
-
-# Unsloth - 2x speed, 60% less memory (Primary for SFT)
-# Install separately: pip install unsloth
-unsloth[colab-new] @ git+https://github.com/unslothai/unsloth.git
+# Unsloth is optional and listed in requirements-gpu.txt
 
 # TRL - Transformer Reinforcement Learning (SFT, DPO, GRPO)
 trl>=0.8.0
@@ -62,8 +59,7 @@ sentencepiece>=0.1.99
 # =============================================================================
 # Memory Optimization for RTX 4090
 # =============================================================================
-bitsandbytes>=0.42.0  # 4-bit/8-bit quantization
-flash-attn>=2.5.0     # Flash Attention 2 (requires CUDA 11.8+)
+# GPU/acceleration extras live in requirements-gpu.txt
 
 # =============================================================================
 # Solidity-specific Tools (for validation)

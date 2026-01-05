@@ -97,7 +97,7 @@ class AblationRunner:
     def __init__(
         self,
         config_path: str,
-        data_dir: str = "/data",
+        data_dir: str = "output",
         dry_run: bool = False,
         skip_preprocess: bool = False,
     ):
@@ -439,7 +439,7 @@ Examples:
     parser.add_argument(
         "--data-dir",
         type=str,
-        default="/data",
+        default="output",
         help="Path to data directory"
     )
     parser.add_argument(

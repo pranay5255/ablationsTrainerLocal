@@ -5,28 +5,15 @@ Ablation Experiment Orchestrator
 Runs ablation experiments on RTX 4090 as defined in experiment configs.
 
 This script orchestrates the complete training pipeline:
-1. Data preprocessing
-2. SFT training
-3. DPO training
-4. GRPO training (optional)
+1. Data preprocessing (THINK, INSTRUCT, RL-ZERO variants)
+2. SFT training (detailed traces for THINK, concise for INSTRUCT)
+3. DPO training (Delta Learning: Strong vs Weak)
+4. RLVR training (OlmoRL: continuous batching, asymmetric clipping)
 5. Evaluation on SmartBugs
 
 Usage:
-    # Run single ablation
-    python run_ablations.py --config experiments/ablations/smollm2_135m.yaml
-
-    # Run all ablations
-    python run_ablations.py --all
-
-    # Run specific stage only
-    python run_ablations.py --config experiments/ablations/smollm2_135m.yaml --stage sft
-
-    # Skip preprocessing (if data already prepared)
-    python run_ablations.py --config experiments/ablations/smollm2_135m.yaml --skip-preprocess
-
-    # Dry run to see what would be executed
-    python run_ablations.py --config experiments/ablations/smollm2_135m.yaml --dry-run
-"""
+    # Run THINK ablation
+    python run_ablations.py --config experiments/ablations/smollm2_135m.yaml --variant THINK
 
 import os
 import sys
@@ -97,18 +84,21 @@ class AblationRunner:
     def __init__(
         self,
         config_path: str,
+        variant: str = "THINK",
         data_dir: str = "output",
         dry_run: bool = False,
         skip_preprocess: bool = False,
     ):
         self.config_path = Path(config_path)
         self.config = load_config(config_path)
+        self.variant = variant
         self.data_dir = Path(data_dir)
         self.dry_run = dry_run
         self.skip_preprocess = skip_preprocess
 
         # Extract config values
         self.experiment_name = self.config.get("experiment", {}).get("name", "ablation")
+        self.experiment_name = f"{self.experiment_name}-{self.variant.lower()}"
         self.model_name = self.config.get("model", {}).get("name")
         self.output_base = Path(self.config.get("output", {}).get("dir", f"checkpoints/{self.experiment_name}"))
 
@@ -145,9 +135,10 @@ from preprocessing.dataset_builder import create_datasets_for_ablation
 create_datasets_for_ablation(
     data_dir='{self.data_dir}',
     output_dir='{OUTPUT_DIR / "processed"}',
+    variant='{self.variant}',
     sft_samples=10000,
     dpo_samples=5000,
-    grpo_prompts=1000
+    rl_prompts=1000
 )
 """
         ]
@@ -204,21 +195,22 @@ create_datasets_for_ablation(
 
         return run_command(cmd, self.dry_run) == 0
 
-    def run_grpo(self) -> bool:
-        """Run GRPO training stage."""
+    def run_rlvr(self) -> bool:
+        """Run RLVR training stage."""
         logger.info("=" * 60)
-        logger.info("STAGE 3: Group Relative Policy Optimization (GRPO)")
+        logger.info("STAGE 3: RL with Verifiable Rewards (RLVR)")
         logger.info("=" * 60)
 
-        grpo_config = self.config.get("stages", {}).get("grpo", {})
-        if not grpo_config.get("enabled", False):
-            logger.info("GRPO stage disabled in config")
+        rlvr_config = self.config.get("stages", {}).get("rlvr", {})
+        if not rlvr_config.get("enabled", False):
+            logger.info("RLVR stage disabled in config")
             return True
 
         cmd = [
             sys.executable,
-            str(PROJECT_ROOT / "training" / "scripts" / "train_grpo.py"),
+            str(PROJECT_ROOT / "training" / "scripts" / "train_rlvr.py"),
             "--config", str(self.config_path),
+            "--variant", self.variant,
         ]
 
         if self.dry_run:
@@ -233,7 +225,7 @@ create_datasets_for_ablation(
         logger.info("=" * 60)
 
         # Find best checkpoint
-        checkpoint_priorities = ["grpo", "dpo", "sft"]
+        checkpoint_priorities = ["rlvr", "dpo", "sft"]
         checkpoint_path = None
 
         for stage in checkpoint_priorities:
@@ -290,7 +282,7 @@ create_datasets_for_ablation(
             "stages": {},
         }
 
-        all_stages = ["preprocess", "sft", "dpo", "grpo", "eval"]
+        all_stages = ["preprocess", "sft", "dpo", "rlvr", "eval"]
 
         if stages is None:
             stages = all_stages
@@ -299,7 +291,7 @@ create_datasets_for_ablation(
             "preprocess": self.preprocess_data,
             "sft": self.run_sft,
             "dpo": self.run_dpo,
-            "grpo": self.run_grpo,
+            "rlvr": self.run_rlvr,
             "eval": self.run_evaluation,
         }
 
@@ -426,9 +418,15 @@ Examples:
         help="Run all ablation experiments"
     )
     parser.add_argument(
+        "--variant",
+        choices=["THINK", "INSTRUCT", "RL-ZERO"],
+        default="THINK",
+        help="Model variant to train (default: THINK)"
+    )
+    parser.add_argument(
         "--stage",
         action="append",
-        choices=["preprocess", "sft", "dpo", "grpo", "eval"],
+        choices=["preprocess", "sft", "dpo", "rlvr", "eval"],
         help="Run specific stage(s) only (can be specified multiple times)"
     )
     parser.add_argument(
@@ -477,6 +475,7 @@ Examples:
     # Run single ablation
     runner = AblationRunner(
         config_path=args.config,
+        variant=args.variant,
         data_dir=args.data_dir,
         dry_run=args.dry_run,
         skip_preprocess=args.skip_preprocess,

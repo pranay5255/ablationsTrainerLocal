@@ -4,11 +4,13 @@ Training infrastructure for smart contract vulnerability detection models using 
 
 ## Overview
 
-This repository contains the training code for fine-tuning small language models (135M - 3B parameters) for smart contract vulnerability detection. The training pipeline follows a multi-stage approach:
+This repository contains the training code for fine-tuning small language models (135M - 3B parameters) for smart contract vulnerability detection. The training pipeline focuses on CPT, SFT, and DPO, with evaluation on SmartBugs. Data collection and data mixture design are handled externally.
 
-1. **Supervised Fine-Tuning (SFT)** - Train on labeled vulnerability data
-2. **Direct Preference Optimization (DPO)** - Improve detection accuracy with preference pairs
-3. **Group Relative Policy Optimization (GRPO)** - Reward-based optimization using validation
+1. **Continued Pretraining (CPT)** - Train on externally prepared CPT corpora (implementation planned)
+2. **Supervised Fine-Tuning (SFT)** - Train on labeled vulnerability data
+3. **Direct Preference Optimization (DPO)** - Improve detection accuracy with preference pairs
+
+**Note:** GRPO/rollout-centric training is deferred to a future phase.
 
 ## Target Metrics
 
@@ -45,9 +47,9 @@ pip install "unsloth[colab-new] @ git+https://github.com/unslothai/unsloth.git"
 pip install flash-attn --no-build-isolation
 ```
 
-### 2. Data Preparation
+### 2. Data Inputs (External)
 
-Place your data in the `/data` directory with the following structure:
+Prepare datasets outside this repo and place them in `/data`. The preprocessing helpers here assume the following layout:
 
 ```
 /data
@@ -59,7 +61,7 @@ Place your data in the `/data` directory with the following structure:
 │   └── contracts.jsonl
 ├── zellic/              # Zellic smart-contract-fiesta
 │   └── *.parquet
-└── audit_reports/       # Audit reports
+└── audit_reports/       # Optional, for CPT when added
     └── *.md
 ```
 
@@ -74,6 +76,7 @@ python run_ablations.py --all
 
 # Run specific stage only
 python run_ablations.py --config experiments/ablations/smollm2_135m.yaml --stage sft
+python run_ablations.py --config experiments/ablations/smollm2_135m.yaml --stage dpo
 
 # Dry run (see what would be executed)
 python run_ablations.py --config experiments/ablations/smollm2_135m.yaml --dry-run
@@ -87,6 +90,8 @@ python experiments/evaluation/smartbugs_eval.py \
     --model checkpoints/smollm2-135m/sft \
     --dataset /data/smartbugs
 ```
+
+DeFiHackLabs evaluation will be added later.
 
 ## Project Structure
 
@@ -110,9 +115,9 @@ ablationsLocal/
 │   └── scripts/
 │       ├── train_sft.py        # SFT training script
 │       ├── train_dpo.py        # DPO training script
-│       └── train_grpo.py       # GRPO training script
+│       └── train_grpo.py       # Planned usage later
 │
-├── preprocessing/               # Data preprocessing
+├── preprocessing/               # Data preprocessing helpers (optional)
 │   ├── data_loader.py          # Data loading utilities
 │   ├── formatters.py           # Format data for training
 │   └── dataset_builder.py      # Build HF datasets
@@ -130,7 +135,7 @@ ablationsLocal/
 
 | Model | Size | Purpose | RTX 4090 Batch Size |
 |-------|------|---------|---------------------|
-| SmolLM2-135M | 135M | Data mix optimization, LR sweeps | 8 |
+| SmolLM2-135M | 135M | LR sweeps, baseline ablations | 8 |
 | SmolLM2-360M | 360M | Scaling validation | 4 |
 | Qwen2.5-0.5B | 0.5B | Code model transfer validation | 4 |
 | Baguettotron-321M | 321M | Alternative architecture | 4 |
@@ -138,6 +143,10 @@ ablationsLocal/
 | Qwen2.5-Coder-3B | 3B | Final model (4-bit) | 1 |
 
 ## Training Configuration
+
+### CPT (Stage 0, planned)
+
+Continued pretraining support is planned for this repo. CPT datasets are assumed to be prepared externally.
 
 ### SFT (Stage 1)
 
@@ -158,14 +167,7 @@ num_epochs: 1
 warmup_ratio: 0.1
 ```
 
-### GRPO (Stage 3)
-
-```yaml
-num_generations: 4
-learning_rate: 1e-6
-num_epochs: 1
-reward_model: slither_validation
-```
+**Note:** GRPO is deferred; the script exists but is not part of the current pipeline.
 
 ## Experiment Tracking
 

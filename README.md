@@ -4,13 +4,13 @@ Training infrastructure for smart contract vulnerability detection models using 
 
 ## Overview
 
-This repository contains the training code for fine-tuning small language models (135M - 3B parameters) for smart contract vulnerability detection. The training pipeline focuses on CPT, SFT, and DPO, with evaluation on SmartBugs. Data collection and data mixture design are handled externally.
+This repository contains the training code for fine-tuning small language models (135M - 7B parameters) for smart contract vulnerability detection. The training pipeline focuses on SFT and DPO (with optional CPT), with evaluation on SmartBugs. Data collection and data mixture design are handled externally.
 
 1. **Continued Pretraining (CPT)** - Train on externally prepared CPT corpora (implementation planned)
 2. **Supervised Fine-Tuning (SFT)** - Train on labeled vulnerability data
 3. **Direct Preference Optimization (DPO)** - Improve detection accuracy with preference pairs
 
-**Note:** GRPO/rollout-centric training is deferred to a future phase.
+**Note:** GRPO/rollout-centric training is deferred to a future phase. The 7B single-GPU track focuses on DPO with 4-bit + LoRA.
 
 ## Target Metrics
 
@@ -49,48 +49,44 @@ uv pip install -r requirements-gpu.txt
 uv pip install flash-attn --no-build-isolation
 ```
 
-### 2. Data Inputs (External)
+### 2. Data Inputs (smart-contract-data)
 
-Prepare datasets outside this repo and place them in `/data`. The preprocessing helpers here assume the following layout:
+This repo expects the raw data to live in the same layout produced by `smart-contract-data/crawlers/output`. Point `--data-dir` to that folder.
 
 ```
-/data
-├── smartbugs/           # SmartBugs-curated dataset
-│   └── dataset/
-│       └── <vuln_type>/
-│           └── *.sol
-├── kaggle/              # Kaggle vulnerability dataset
-│   └── contracts.jsonl
-├── zellic/              # Zellic smart-contract-fiesta
-│   └── *.parquet
-└── audit_reports/       # Optional, for CPT when added
-    └── *.md
+smart-contract-data/crawlers/output/
+├── repos/
+│   ├── vulnerability_datasets/   # smartbugs-curated, SolidiFI, vulndb, etc.
+│   └── audit_repos/               # audit reports (optional)
+└── datasets/
+    ├── kaggle/                    # labeled CSV datasets
+    └── huggingface/               # Zellic/smart-contract-fiesta (optional, large)
 ```
 
 ### 3. Run Training
 
 ```bash
 # Run a single ablation experiment
-python run_ablations.py --config experiments/ablations/smollm2_135m.yaml
+uv run python run_ablations.py --config experiments/ablations/smollm2_135m.yaml
 
 # Run all ablations sequentially
-python run_ablations.py --all
+uv run python run_ablations.py --all
 
 # Run specific stage only
-python run_ablations.py --config experiments/ablations/smollm2_135m.yaml --stage sft
-python run_ablations.py --config experiments/ablations/smollm2_135m.yaml --stage dpo
+uv run python run_ablations.py --config experiments/ablations/smollm2_135m.yaml --stage sft
+uv run python run_ablations.py --config experiments/ablations/smollm2_135m.yaml --stage dpo
 
 # Dry run (see what would be executed)
-python run_ablations.py --config experiments/ablations/smollm2_135m.yaml --dry-run
+uv run python run_ablations.py --config experiments/ablations/smollm2_135m.yaml --dry-run
 ```
 
 ### 4. Evaluate Results
 
 ```bash
 # Evaluate a trained model
-python experiments/evaluation/smartbugs_eval.py \
+uv run python experiments/evaluation/smartbugs_eval.py \
     --model checkpoints/smollm2-135m/sft \
-    --dataset /data/smartbugs
+    --dataset /path/to/smart-contract-data/crawlers/output/repos/vulnerability_datasets/smartbugs-curated
 ```
 
 DeFiHackLabs evaluation will be added later.
@@ -143,6 +139,7 @@ ablationsLocal/
 | Baguettotron-321M | 321M | Alternative architecture | 4 |
 | Qwen2.5-Coder-1.5B | 1.5B | Pre-scale validation | 2 |
 | Qwen2.5-Coder-3B | 3B | Final model (4-bit) | 1 |
+| Qwen2.5-Coder-7B | 7B | Single-GPU DPO (4-bit + LoRA) | 1 |
 
 ## Training Configuration
 
@@ -180,17 +177,65 @@ Training metrics are logged to Weights & Biases by default:
 wandb login
 
 # Or disable W&B logging
-python run_ablations.py --config experiments/ablations/smollm2_135m.yaml --dry-run
+uv run python run_ablations.py --config experiments/ablations/smollm2_135m.yaml --dry-run
 ```
 
 ## Memory Optimization
 
-For larger models on RTX 4090:
+For larger models on RTX 4090 (including 7B):
 
 1. **4-bit Quantization**: Enable `load_in_4bit: true` in config
 2. **Gradient Checkpointing**: Enabled by default
 3. **Flash Attention 2**: Automatically used when available
 4. **Unsloth**: 2x faster training, 60% less memory
+
+## 7B Single-GPU Track (DPO-Focused)
+
+Recommended when targeting a 7B model on one RTX 4090.
+
+1. Use 4-bit + LoRA and keep max sequence length modest (2K-4K).
+2. Prefer DPO over long SFT runs; use SFT only for format alignment.
+3. Keep per-device batch size at 1 and increase gradient accumulation.
+
+Example config deltas:
+
+```yaml
+model:
+  name: "Qwen/Qwen2.5-Coder-7B"
+  load_in_4bit: true
+  max_seq_length: 2048
+lora:
+  enabled: true
+  r: 16
+  alpha: 32
+stages:
+  sft:
+    num_epochs: 1
+    per_device_batch_size: 1
+    gradient_accumulation_steps: 32
+  dpo:
+    per_device_batch_size: 1
+    gradient_accumulation_steps: 32
+```
+
+## Using smart-contract-data
+
+Point `--data-dir` to the crawler output directory:
+
+```bash
+uv run python run_ablations.py \
+  --config experiments/ablations/smollm2_135m.yaml \
+  --data-dir ../smart-contract-data/crawlers/output
+```
+
+Synthetic data plan (SFT/DPO):
+
+1. Pull contracts from `repos/vulnerability_datasets` and Kaggle CSVs in `datasets/kaggle`.
+2. Use `preprocessing/dataset_builder.py` to format SFT/DPO examples.
+3. For DPO, create preference pairs with a verifier:
+4. Chosen = compiles, fixes vuln, no new findings.
+5. Rejected = compile failures, new findings, or wrong vulnerability.
+6. Use `yudai-swe-agent/rl_results` to seed bad/good pairs and tool-use traces.
 
 ## Go/No-Go Checkpoints
 
@@ -220,7 +265,7 @@ Remediation: Move state update before external call using checks-effects-interac
 
 ```bash
 # Reduce batch size
-python run_ablations.py --config experiments/ablations/smollm2_135m.yaml
+uv run python run_ablations.py --config experiments/ablations/smollm2_135m.yaml
 
 # Or enable 4-bit quantization in config
 load_in_4bit: true
@@ -240,7 +285,7 @@ uv pip install -r requirements-gpu.txt
 Ensure data is placed in `/data` directory or specify with `--data-dir`:
 
 ```bash
-python run_ablations.py --config experiments/ablations/smollm2_135m.yaml --data-dir /path/to/data
+uv run python run_ablations.py --config experiments/ablations/smollm2_135m.yaml --data-dir /path/to/data
 ```
 
 ## License
@@ -252,7 +297,7 @@ See individual model licenses:
 
 ## References
 
-- [PRD.md](PRD.md) - Full product requirements document
+- [PRD_v3.md](PRD_v3.md) - Full product requirements document
 - [TRL Documentation](https://huggingface.co/docs/trl)
 - [Unsloth](https://unsloth.ai/)
 - [SmartBugs](https://github.com/smartbugs/smartbugs-curated)

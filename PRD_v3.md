@@ -2,7 +2,7 @@
 ## Product Requirements Document
 
 **Version:** 3.0  
-**Updated:** 2026-01-05  
+**Updated:** 2026-02-04  
 **Status:** Post-Training Ablation Phase  
 **Methodology:** OLMo 3 Post-Training Pipeline
 
@@ -10,7 +10,7 @@
 
 ## 1. Executive Summary
 
-This project trains a 1B-3B parameter model for smart contract vulnerability detection, achieving **>35% precision with >70% recall** through an OLMo 3-inspired post-training pipeline. The focus is on ablation studies across three model variants: **THINK** (reasoning), **INSTRUCT** (fast detection), and **RL-ZERO** (baseline).
+This project trains a 1B-3B parameter model for smart contract vulnerability detection, with an additional **single-GPU 7B DPO track** for RTX 4090. The goal remains **>35% precision with >70% recall** through an OLMo 3-inspired post-training pipeline. The focus is on ablation studies across three model variants: **THINK** (reasoning), **INSTRUCT** (fast detection), and **RL-ZERO** (baseline).
 
 ### What Changed from v2.0
 
@@ -42,6 +42,30 @@ This project trains a 1B-3B parameter model for smart contract vulnerability det
 | 8 | Warm-start Strategy | INSTRUCT starts from THINK SFT checkpoint |
 | 9 | Task Definition | **Hybrid**: Multi-label classification + Generative explanation |
 | 10 | Vulnerability Scope | 5 primary SWC types, predict all 37 |
+| 11 | Single-GPU Track | **7B DPO** on RTX 4090 with 4-bit + LoRA, short context |
+
+---
+
+## 2.1 Single-GPU 7B DPO Track (2026-02-04 Addendum)
+
+This addendum describes a pragmatic path to a **7B model on a single RTX 4090** using the existing SFT/DPO pipeline and the `yudai-swe-agent` tool-use format.
+
+**Core constraints**
+
+1. **Memory:** 4-bit quantization + LoRA, gradient checkpointing on.
+2. **Context:** 2K-4K max sequence length to stay within 24GB VRAM.
+3. **Training focus:** Short SFT for format alignment, **DPO as the primary stage**.
+
+**Recommended base models**
+
+1. Qwen2.5-Coder-7B (preferred for Solidity/code).
+2. Any 7B code model that supports 4-bit + LoRA on RTX 4090.
+
+**High-level workflow**
+
+1. Build SFT/DPO datasets from `smart-contract-data/crawlers/output`.
+2. Seed DPO pairs with verified good/bad trajectories from `yudai-swe-agent/rl_results`.
+3. Train with `train_sft.py` (short) then `train_dpo.py` (primary).
 
 ---
 
@@ -107,6 +131,7 @@ Remediation: Move `balances[msg.sender] = 0` before the external call.
 | Qwen2.5-Coder-0.5B | 0.5B | Weak model for Delta Learning DPO |
 | SmolLM2-1.7B | 1.7B | Pre-scale validation |
 | Qwen2.5-Coder-1.5B | 1.5B | Mid-scale ablations |
+| Qwen2.5-Coder-7B | 7B | Single-GPU DPO track (4-bit + LoRA) |
 
 **Final Training:**
 - **Primary**: Qwen2.5-Coder-3B (strong model for Delta Learning)
@@ -153,6 +178,26 @@ Remediation: Move `balances[msg.sender] = 0` before the external call.
 
 ## 5. Stage 1: Supervised Fine-Tuning (SFT)
 
+### Data Source Integration (smart-contract-data)
+
+All raw data should come from `smart-contract-data/crawlers/output` to keep a single source of truth.
+
+Expected layout:
+
+```
+smart-contract-data/crawlers/output/
+├── repos/vulnerability_datasets/   # SmartBugs, SolidiFI, vulndb, etc.
+├── repos/audit_repos/              # Audit reports (optional)
+└── datasets/kaggle/                # Labeled CSV datasets
+```
+
+**How to point the pipeline at this data**
+
+1. Pass `--data-dir ../smart-contract-data/crawlers/output` when running `run_ablations.py`.
+2. Or set `data_dir` directly when calling `create_datasets_for_ablation(...)`.
+
+The `preprocessing/DataLoader` already understands this layout and will pick up SmartBugs, Kaggle CSVs, and (optionally) HuggingFace/Zellic when present.
+
 ### 5.1 THINK Model SFT
 
 **Purpose:** Generate detailed reasoning traces before vulnerability detection. The model learns to "think out loud" about contract analysis before producing structured output.
@@ -167,6 +212,12 @@ Remediation: Move `balances[msg.sender] = 0` before the external call.
 | Audit Reports | 1000+ → ~15K | Rewrite audit findings as reasoning traces |
 | Synthetic Pairs | ~50K | HexaCoder + GPT-4.1 generated with full reasoning |
 | General Reasoning | ~20K | Math/code reasoning from DAPO-Math, AceCoder (domain transfer) |
+
+**Implementation note (smart-contract-data):**
+
+1. Use `smart-contract-data/crawlers/output/repos/vulnerability_datasets` as the primary labeled source.
+2. Use Kaggle CSVs in `output/datasets/kaggle` for high-volume labeled samples.
+3. Generate synthetic reasoning traces from the raw contracts and labels, then format via `preprocessing/formatters.py`.
 
 **Reasoning Trace Generation Prompt:**
 ```
@@ -356,6 +407,40 @@ This variant provides a critical baseline: if RL-ZERO matches THINK/INSTRUCT per
 │                                                                          │
 └─────────────────────────────────────────────────────────────────────────┘
 ```
+
+### 6.1.1 Single-GPU DPO Pairing (smart-contract-data + rl_results)
+
+For the 7B single-GPU track, build DPO pairs from:
+
+1. Contracts in `smart-contract-data/crawlers/output/repos/vulnerability_datasets` and Kaggle CSVs in `output/datasets/kaggle`.
+2. Tool-use trajectories in `yudai-swe-agent/rl_results`.
+
+**Preference scoring (example):**
+
+```
+reward = 1.0 * compilation_passed
+        + 1.0 * vulnerability_fixed
+        - 0.5 * new_vulns_introduced
+        - 0.5 * tool_errors
+        - 0.5 * format_violations
+```
+
+Use the highest-reward trajectory as `chosen` and the lowest as `rejected` for each prompt.
+
+### 6.1.2 Observed Failure Modes in Current RL Results (2026-02-04)
+
+As of 2026-02-04, `rl_results` contains a single episode (`ep_35037`) and is used here as a preliminary signal.
+
+1. Tool errors from incorrect Slither detector names (`reentrancy` vs `reentrancy-eth`).
+2. Compile failures before Foundry config was set.
+3. Fix removed the core reentrancy but introduced new Slither findings (low-level calls, pragma/solc warnings).
+
+**Training strategies derived from this:**
+
+1. Prefer trajectories that compile before analysis and fixes.
+2. Require correct detector selection (`slither --list-detectors` if unsure).
+3. Penalize fixes that introduce new findings unrelated to the target vulnerability.
+4. Enforce strict output formatting when the agent requires a single bash block.
 
 ### 6.2 THINK Model DPO
 
